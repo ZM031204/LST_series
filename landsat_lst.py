@@ -1,6 +1,13 @@
 import ee
 import folium
 from ee_lst.landsat_lst import fetch_landsat_collection
+import altair as alt
+import eerepr
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from mpl_toolkits.axes_grid1 import ImageGrid
 
 # Define a method to display Earth Engine image tiles
 def add_ee_layer(self, ee_image_object, vis_params, name):
@@ -52,17 +59,15 @@ def show_map(self, map_data, map_name, type = 'LST'):
 
 def __main__():
     ee.Initialize(project='ee-channingtong')
-
-    #test_dataset = ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
-    #print("crs=", test_dataset.first().select(0).projection().getInfo())
     # Define parameters
     boundary = ee.FeatureCollection('projects/ee-channingtong/assets/YZBboundary')
     geometry = boundary.union().geometry()
     YZB_area = geometry.area().getInfo()
     print("Area of YZB: ", YZB_area)
     satellite = "L8"
-    date_start = "2022-01-01"
-    date_end = "2023-01-01"
+    year = 2022
+    date_start = str(year) + "-01-01"
+    date_end = str(year+1) + "-01-01"
     use_ndvi = True
     cloud_threshold = 20
 
@@ -74,6 +79,7 @@ def __main__():
         print(e)
 
     month_list = range(1, 13)
+    month_list = [10] # for test
     for month in month_list:
         current_month = landsat_coll.filter(ee.Filter.calendarRange(month, month, 'month'))
         image_num = current_month.size().getInfo()
@@ -81,7 +87,8 @@ def __main__():
         if (image_num == 0):
             continue
         # conbine the images at the same day
-        month_average = current_month.mean()
+        collection_data = calcAverage(current_month);
+        month_average = current_month.mean().clip(geometry)
         
         #if (month_average.bounds().area().getInfo() < 0.9 * YZB_area):
         #    continue
@@ -90,8 +97,15 @@ def __main__():
             'geometry': geometry,
             'image': month_average
         }
-        map_name = "landsat-" + str(month)
+        map_name = "landsat-" + str(year) + '-' + str(month)
         show_map(None, image_data, map_name,'LST')
+        task = ee.batch.Export.image.toDrive(image=month_average.select('LST'),
+                                        description=map_name,
+                                        scale=20,
+                                        region=geometry,
+                                        fileFormat='GeoTIFF',
+                                        maxPixels=1e13)
+        task.start()
 
 
     # Get Landsat collection with added variables: NDVI, FVC, TPW, EM, LST    
