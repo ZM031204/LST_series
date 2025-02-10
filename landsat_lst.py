@@ -57,15 +57,13 @@ def show_map(self, map_data, map_name, type = 'LST'):
     # Display the map
     map_render.save(map_name + '.html')
 
-def __main__():
-    ee.Initialize(project='ee-channingtong')
+def create_lst_image(year,month_list,folder_name):
     # Define parameters
     boundary = ee.FeatureCollection('projects/ee-channingtong/assets/YZBboundary')
     geometry = boundary.union().geometry()
     YZB_area = geometry.area().getInfo()
     print("Area of YZB: ", YZB_area)
     satellite = "L8"
-    year = 2022
     date_start = str(year) + "-01-01"
     date_end = str(year+1) + "-01-01"
     use_ndvi = True
@@ -78,17 +76,14 @@ def __main__():
     except ValueError as e:
         print(e)
 
-    month_list = range(1, 13)
-    month_list = [10] # for test
     for month in month_list:
         current_month = landsat_coll.filter(ee.Filter.calendarRange(month, month, 'month'))
         image_num = current_month.size().getInfo()
-        print("total num of the month", str(month), current_month.size().getInfo())
+        print("total num of the month", str(month), ':', current_month.size().getInfo())
         if (image_num == 0):
             continue
-        # conbine the images at the same day
-        collection_data = calcAverage(current_month);
-        month_average = current_month.mean().clip(geometry)
+        # 先选择所有波段，然后排除 TIMESTAMP
+        month_average = current_month.select('LST').mean().clip(geometry)
         
         #if (month_average.bounds().area().getInfo() < 0.9 * YZB_area):
         #    continue
@@ -99,24 +94,13 @@ def __main__():
         }
         map_name = "landsat-" + str(year) + '-' + str(month)
         show_map(None, image_data, map_name,'LST')
-        task = ee.batch.Export.image.toDrive(image=month_average.select('LST'),
+        task = ee.batch.Export.image.toDrive(image=month_average,
                                         description=map_name,
-                                        scale=20,
+                                        folder=f'{folder_name}',
+                                        scale=30,
+                                        crs='EPSG:4326',
                                         region=geometry,
                                         fileFormat='GeoTIFF',
                                         maxPixels=1e13)
         task.start()
-
-
-    # Get Landsat collection with added variables: NDVI, FVC, TPW, EM, LST    
-    '''
-    # Uncomment the code below to export an image band to your drive
-    task = ee.batch.Export.image.toDrive(image=feature_image.select('LST'),
-                                        description='LST',
-                                        scale=20,
-                                        region=geometry,
-                                        fileFormat='GeoTIFF')
-    task.start()
-    '''
-
-__main__()
+        return task
