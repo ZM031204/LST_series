@@ -1,3 +1,7 @@
+client_secrets.json
+*.html
+.env
+convert_js_to_python.py
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
