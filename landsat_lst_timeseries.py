@@ -1,6 +1,8 @@
 import ee
 from ee_lst.landsat_lst import fetch_landsat_collection
 from ee_lst.broadband_emiss import add_band
+from functools import partial
+import random
 ee.Initialize()
 
 # Define the Landsat LST calculation functions (equivalent to JS modules)
@@ -13,65 +15,75 @@ def get_specific_collection(satellite, date_start, date_end, geometry, cloud_thr
         print(e)
     return landsat_coll
 
-def make_get_collection(date_start, date_end, geometry, cloud_threshold, use_ndvi):
+def get_collection_wapper(date_start, date_end, geometry, cloud_threshold, use_ndvi):
     def get_collection(satellite):
         return get_specific_collection(satellite, date_start, date_end, geometry, cloud_threshold, use_ndvi)
     return get_collection
 
-# 创建一个包装函数来处理map
-def create_add_band_mapper(use_ndvi):
+def create_add_band_mapper():
     def mapper(image):
-        return add_band(use_ndvi, image)
+        return add_band(True, image)
     return mapper
 
-site = ee.Geometry.Point([-116.01947, 36.62373])
-geometry = site.buffer(30)
-date_start = '1982-08-01'
-date_end = '2020-01-31'
-use_ndvi = True
-add_bbe = create_add_band_mapper(True)
-cloud_threshold = 20
-
-get_collection = make_get_collection(date_start, date_end, geometry, cloud_threshold, use_ndvi)
-L8coll = get_collection('L8').map(add_bbe)
-L7coll = get_collection('L7').map(add_bbe)
-L5coll = get_collection('L5').map(add_bbe)
-L4coll = get_collection('L4').map(add_bbe)
-
-def rename_band(image, sat):
-    return image.select('LST').rename(f'LST_{sat}')
-
-landsat_coll = ee.ImageCollection([])
-for sat, coll in [('L8', L8coll), ('L7', L7coll), ('L5', L5coll), ('L4', L4coll)]:
-    landsat_coll = landsat_coll.merge(coll.map(lambda img: rename_band(img, sat)))
-
-# Generate time series chart (Note: Direct charting in Python requires altair/folium)
-# For Python, we typically export the data instead
-# This shows how to create a feature collection for export
-def create_feature(image):
+def create_feature(geometry, site, satellite, image):
     date = ee.Date(image.get('system:time_start'))
+    scale = 30 # 30m resolution 
     props = {
         'year': date.get('year'),
         'month': date.get('month'),
         'day': date.get('day'),
-        'hour': date.get('hour'),
-        'minute': date.get('minute'),
-        'lst': image.select('LST').reduceRegion(ee.Reducer.mean(), geometry, 30).get('LST'),
-        'tpw': image.select('TPW').reduceRegion(ee.Reducer.mean(), geometry, 30).get('TPW'),
-        'em': image.select('EM').reduceRegion(ee.Reducer.mean(), geometry, 30).get('EM'),
-        'fvc': image.select('FVC').reduceRegion(ee.Reducer.mean(), geometry, 30).get('FVC'),
-        'bbe': image.select('BBE').reduceRegion(ee.Reducer.mean(), geometry, 30).get('BBE')
+        'lst': image.select('LST').reduceRegion(ee.Reducer.mean(), geometry, scale).get('LST'),
+        'tpw': image.select('TPW').reduceRegion(ee.Reducer.mean(), geometry, scale).get('TPW'),
+        'em': image.select('EM').reduceRegion(ee.Reducer.mean(), geometry, scale).get('EM'),
+        'satellite': satellite,
+        'bbe': image.select('BBE').reduceRegion(ee.Reducer.mean(), geometry, scale).get('BBE')
     }
     return ee.Feature(site, props)
 
-# Export to Drive
-task = ee.batch.Export.table.toDrive(
-    collection=ee.FeatureCollection(L8coll.map(create_feature)),
-    description='export_landsat_lst_timeseries',
-    folder='landsat_lst_timeseries',
-    fileNamePrefix='landsat_lst_timeseries',
-    fileFormat='CSV'
-)
-task.start()
+def get_collection(date_start, date_end, site, cloud_threshold, use_ndvi):
+    geometry = site.buffer(30)
+    add_bbe = create_add_band_mapper()
 
-print("Export task started.") 
+    get_collection = get_collection_wapper(date_start, date_end, geometry, cloud_threshold, use_ndvi)
+    L8coll = get_collection('L8').map(add_bbe)
+    L7coll = get_collection('L7').map(add_bbe)
+    L5coll = get_collection('L5').map(add_bbe)
+    L4coll = get_collection('L4').map(add_bbe)
+
+    landsat_coll = ee.ImageCollection([])
+    basic_wrapper = partial(create_feature, geometry, site)
+    for sat, coll in [('L8', L8coll), ('L7', L7coll), ('L5', L5coll), ('L4', L4coll)]:
+        feature_wrapper = partial(basic_wrapper, sat)
+        landsat_coll = landsat_coll.merge(coll.map(feature_wrapper))
+    return landsat_coll.filter(ee.Filter.notNull(['lst']))
+
+def export_to_drive(landsat_coll, point_name):
+    task = ee.batch.Export.table.toDrive(
+        collection=ee.FeatureCollection(landsat_coll),
+        description='export_landsat_lst_timeseries_for_'+point_name,
+        folder='landsat_lst_timeseries',
+        fileNamePrefix=point_name,
+        fileFormat='CSV'
+    )
+    task.start()
+    print("Export task started.") 
+
+def create_series(lat,lon):
+    # use current time to generate a random number
+    random_number = random.randint(10000, 99999)
+    point_name = str(lat).replace('.', '') + '_' + str(lon).replace('.', '') + '_' + str(random_number)
+    site = ee.Geometry.Point([lat, lon])
+    date_start = '1982-08-01'
+    date_end = '2024-01-31'
+    cloud_threshold = 20
+    use_ndvi = True
+    landsat_coll = get_collection(date_start, date_end, site, cloud_threshold, use_ndvi)
+    export_to_drive(landsat_coll, point_name)
+
+def __main__():
+    lat = 114.35
+    lon = 30.35
+    create_series(lat, lon)
+
+if __name__ == '__main__':
+    __main__()
