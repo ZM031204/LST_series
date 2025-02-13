@@ -67,6 +67,7 @@ def export_to_drive(landsat_coll, point_name):
     )
     task.start()
     print("Export task started.") 
+    return task
 
 def create_series(lat,lon):
     # use current time to generate a random number
@@ -78,7 +79,7 @@ def create_series(lat,lon):
     cloud_threshold = 20
     use_ndvi = True
     landsat_coll = get_collection(date_start, date_end, site, cloud_threshold, use_ndvi)
-    export_to_drive(landsat_coll, point_name)
+    return export_to_drive(landsat_coll, point_name)
 
 def __main__():
     lat = 114.35
