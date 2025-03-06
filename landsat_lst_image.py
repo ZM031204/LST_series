@@ -1,8 +1,10 @@
 import ee
 import folium
-from ee_lst.landsat_lst import fetch_landsat_collection
+from ee_lst.landsat_lst import fetch_best_landsat_image
 import altair as alt
 import eerepr
+import logging
+import traceback
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -57,50 +59,69 @@ def show_map(self, map_data, map_name, type = 'LST'):
     # Display the map
     map_render.save(map_name + '.html')
 
-def create_lst_image(year,month_list,folder_name):
+def filter_city_bound(city_geometry):
+    """
+    city geometry buffer has many scatters. select the largest polygon as the main urban area
+    """
+    if (city_geometry.type().getInfo() == 'Polygon'):
+        return city_geometry
+    geometry_num = city_geometry.geometries().length().getInfo()
+    logging.debug(f"geometry_num: {geometry_num}")
+    largest = None
+    max_area = 0
+    for i in range(0,geometry_num):
+        polygon = ee.Geometry.Polygon(city_geometry.coordinates().get(i))
+        area = polygon.area().getInfo()
+        if area > max_area:
+            max_area = area
+            largest = ee.Geometry(polygon)
+    logging.debug(f"max area is {max_area}")
+    return largest
+
+def create_lst_image(city_name,date_start,date_end,city_geometry,urban_geometry,folder_name,to_drive):
     # Define parameters
-    boundary = ee.FeatureCollection('projects/ee-channingtong/assets/YZBboundary')
-    geometry = boundary.union().geometry()
-    YZB_area = geometry.area().getInfo()
-    print("Area of YZB: ", YZB_area)
-    satellite = "L8"
-    date_start = str(year) + "-01-01"
-    date_end = str(year+1) + "-01-01"
+    satellite_list = ['L8', 'L7', 'L5', 'L4']
     use_ndvi = True
     cloud_threshold = 20
-
-    try:
-        landsat_coll = fetch_landsat_collection(
-        satellite, date_start, date_end, geometry, cloud_threshold, use_ndvi
-        )
-    except ValueError as e:
-        print(e)
-
-    for month in month_list:
-        current_month = landsat_coll.filter(ee.Filter.calendarRange(month, month, 'month'))
-        image_num = current_month.size().getInfo()
-        print("total num of the month", str(month), ':', current_month.size().getInfo())
-        if (image_num == 0):
+   
+    landsat_coll = None
+    map_name = f'landsat_{city_name}'
+    for satellite in satellite_list:
+        try:
+            landsat_coll = fetch_best_landsat_image(satellite, date_start, date_end, city_geometry, cloud_threshold, urban_geometry, use_ndvi)
+            logging.info(f"success: {satellite}")
+            map_name = f'{map_name}_{satellite}'
+            break
+        except ValueError as ve:
+            logging.info(f"no data for {satellite}({ve})")
             continue
-        # 先选择所有波段，然后排除 TIMESTAMP
-        month_average = current_month.select('LST').mean().clip(geometry)
-        
-        #if (month_average.bounds().area().getInfo() < 0.9 * YZB_area):
-        #    continue
+        except Exception as e:
+            logging.error(f"fetch error: {e}\n traceback: {traceback.format_exc()}")
+            continue
+    
+    if landsat_coll is None:
+        logging.error("No Landsat data found")
+        return None
 
-        image_data = {
-            'geometry': geometry,
-            'image': month_average
-        }
-        map_name = "landsat-" + str(year) + '-' + str(month)
-        show_map(None, image_data, map_name,'LST')
-        task = ee.batch.Export.image.toDrive(image=month_average,
-                                        description=map_name,
-                                        folder=f'{folder_name}',
-                                        scale=30,
-                                        crs='EPSG:4326',
-                                        region=geometry,
-                                        fileFormat='GeoTIFF',
-                                        maxPixels=1e13)
+    image_data = {
+        'geometry': city_geometry,
+        'image': landsat_coll
+    }
+    task = None
+    if to_drive:
+        task = ee.batch.Export.image.toDrive(image=landsat_coll,
+                                    description=map_name,
+                                    folder=f'{folder_name}',
+                                    scale=30,
+                                    crs='EPSG:4326',
+                                    region=city_geometry,
+                                    fileFormat='GeoTIFF',
+                                    maxPixels=1e13)
         task.start()
-        return task
+    else:
+        try:
+            show_map(None, image_data, map_name,'LST')
+            logging.info(f"image saved to {map_name}.html")
+        except Exception as e:
+            logging.error(f"error: {e}\n traceback: {traceback.format_exc()}")
+    return task
