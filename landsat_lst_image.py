@@ -1,15 +1,16 @@
 import ee
+import os
 import folium
-from ee_lst.landsat_lst import fetch_best_landsat_image
-import altair as alt
-import eerepr
+import time
 import logging
 import traceback
-import geopandas as gpd
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from mpl_toolkits.axes_grid1 import ImageGrid
+import multiprocessing as mp
+import csv
+from dotenv import load_dotenv
+from pypinyin import lazy_pinyin as pinyin
+from fetch_drive import download_and_clean, check_task_status
+from fetch_drive import get_folder_id_by_name as get_folder_id
+from ee_lst.landsat_lst import fetch_best_landsat_image
 
 # Define a method to display Earth Engine image tiles
 def add_ee_layer(self, ee_image_object, vis_params, name):
@@ -78,19 +79,28 @@ def filter_city_bound(city_geometry):
     logging.debug(f"max area is {max_area}")
     return largest
 
-def create_lst_image(city_name,date_start,date_end,city_geometry,urban_geometry,folder_name,to_drive):
+def create_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_name,to_drive):
     # Define parameters
-    satellite_list = ['L8', 'L7', 'L5', 'L4']
+    month_length = [31,28,31,30,31,30,31,31,30,31,30,31]
+    satellite_list = ['L8', 'L5', 'L7', 'L4']
+    date_start = ee.Date.fromYMD(year, month, 1)
+    date_end = ee.Date.fromYMD(year, month, month_length[month-1]).advance(1, 'day')
     use_ndvi = True
-    cloud_threshold = 20
+    cloud_threshold = 25
    
+    load_dotenv()
+    record_file_path = os.getenv('RECORD_FILE_PATH') # csv
+
     landsat_coll = None
     map_name = f'landsat_{city_name}'
     for satellite in satellite_list:
         try:
-            landsat_coll = fetch_best_landsat_image(satellite, date_start, date_end, city_geometry, cloud_threshold, urban_geometry, use_ndvi)
+            landsat_coll, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud = fetch_best_landsat_image(satellite, date_start, date_end, city_geometry, cloud_threshold, urban_geometry, use_ndvi)
+            with open(record_file_path, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([city_name, year, month, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud])
             logging.info(f"success: {satellite}")
-            map_name = f'{map_name}_{satellite}'
+            map_name = f'{map_name}_{satellite}_{year}_{month}'
             break
         except ValueError as ve:
             logging.info(f"no data for {satellite}({ve})")
@@ -107,21 +117,62 @@ def create_lst_image(city_name,date_start,date_end,city_geometry,urban_geometry,
         'geometry': city_geometry,
         'image': landsat_coll
     }
-    task = None
     if to_drive:
-        task = ee.batch.Export.image.toDrive(image=landsat_coll,
-                                    description=map_name,
+        e_city_name = ''.join(pinyin(city_name))
+        descrption = f"{e_city_name}Landsat{year}{month:02}"
+        try:
+            task = ee.batch.Export.image.toDrive(image=landsat_coll,
+                                    description=descrption,
                                     folder=f'{folder_name}',
                                     scale=30,
                                     crs='EPSG:4326',
                                     region=city_geometry,
                                     fileFormat='GeoTIFF',
                                     maxPixels=1e13)
-        task.start()
+            task.start()
+            return task, descrption
+        except Exception as e:
+            logging.error(f"error to export: {e}\n traceback: {traceback.format_exc()}")
+            return None
     else:
         try:
             show_map(None, image_data, map_name,'LST')
             logging.info(f"image saved to {map_name}.html")
+            return month
         except Exception as e:
             logging.error(f"error: {e}\n traceback: {traceback.format_exc()}")
-    return task
+    return None
+
+def monitor_export_task(task,file_name,drive,folder_name,save_path):
+    task_identifier = file_name
+    is_success = check_task_status(task,task_identifier)
+    if is_success:
+        time.sleep(30) # wait for the last iamge to be created
+        folder_id = get_folder_id(drive,folder_name)
+        try:
+            download_and_clean(drive, folder_id, file_name, save_path)
+        except Exception as e:
+            logging.error(f'{file_name} failed to download({e})')
+        logging.info(f'{file_name} exported')
+    return
+
+def export_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_name,to_drive,drive, save_path):
+    """
+    export the lst image to the drive
+    """
+    try:
+        try:
+            task, file_name = create_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_name,to_drive)
+        except Exception as e:
+            logging.error(f"error to create task: {e}")
+            return None
+        logging.info(f'start export {city_name} {year} {month}')
+        if (to_drive):
+            process = mp.Process(target=monitor_export_task, args=(task,file_name,drive,folder_name,save_path))
+            process.start()
+            print("Process PID: ", process.pid)
+            logging.info(f'{city_name} {year} {month} export PID is {process.pid}')
+        return month
+    except Exception as e:
+        logging.warning(f'{city_name} {year} {month} failed')
+        return None
