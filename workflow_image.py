@@ -19,10 +19,14 @@ logging.getLogger('ee').setLevel(logging.WARNING)
 
 def init_record_file():
     record_file_path = os.getenv('RECORD_FILE_PATH') # csv
+    monitor_file_path = os.getenv('PROCESS_MONITOR_FILE_PATH')
     header = ['city', 'year', 'month', 'toa_image_porpotion', 'sr_image_porpotion', 'toa_cloud_ratio', 'sr_cloud_ratio']
-    with open(record_file_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
+    with open(monitor_file_path, 'w', newline='') as f:
+        pass
+    if (not os.path.exists(record_file_path)):
+        with open(record_file_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
 
 def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
     asset_path = 'projects/ee-channingtong/assets/'
@@ -30,8 +34,15 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
     #total_geometry = total_boundary.union().geometry()
     if (to_drive):
         gauth = GoogleAuth()
-        gauth.LocalWebserverAuth()  # 首次运行需要浏览器授权
+        gauth.LoadCredentialsFile(os.getenv('CREDENTIALS_FILE_PATH'))
+        if (gauth.credentials is None):
+            gauth.LocalWebserverAuth()
         drive = GoogleDrive(gauth)
+        gauth.Refresh()
+        logging.info(f"token current expires in: {gauth.credentials.token_expiry}")
+        if gauth.credentials.refresh_token is None:
+            print('refresh token is None')
+            return
     index = 0
     for city_boundary in total_boundary.getInfo()['features']:
         index += 1
@@ -48,13 +59,15 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
         if (city_name != check_city_name):
             logging.warning(f"City name mismatch: {city_name}, {check_city_name}")
             continue
-        year_list = range(1984,2024)
+        year_list = range(1984,2025)
         for year in year_list:
             month_list = range(1,13)
             if (to_drive):
-                with ThreadPoolExecutor() as executor:
+                with ThreadPoolExecutor(max_workers=5) as executor:
                     task_states = [executor.submit(
-                        export_lst_image, city_name = city_name, 
+                        export_lst_image, 
+                        gauth = gauth,
+                        city_name = city_name, 
                         year = year,month = month,
                         city_geometry = city_geometry, urban_geometry = urban_geometry, 
                         folder_name = folder_name, to_drive = to_drive,
@@ -63,7 +76,8 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
                     exported_months = [month for month in as_completed(task_states) if month is not None]
                     logging.info(f"{city_name} {year} exported months: {exported_months}")
             else:
-                with ThreadPoolExecutor() as executor:
+                with ThreadPoolExecutor(max_workers=9) as executor:
+
                     finish_states = [executor.submit(
                         create_lst_image, city_name = city_name, 
                         year = year,month = month,
@@ -77,8 +91,9 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
 def __main__():
     load_dotenv()
     SAVE_PATH = os.getenv('IMAGE_SAVE_PATH')
+    project_name = os.getenv('PROJECT_NAME')
+    ee.Initialize(project=project_name)
 
-    ee.Initialize(project='ee-channingtong')
     folder_name = 'landsat_lst_timeseries'
     init_record_file()
 
