@@ -3,6 +3,7 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from landsat_lst_image import export_lst_image, filter_city_bound, create_lst_image
 from dotenv import load_dotenv
+from parseRecord import parse_record
 import os
 import ee
 import logging
@@ -20,7 +21,7 @@ logging.getLogger('ee').setLevel(logging.WARNING)
 def init_record_file():
     record_file_path = os.getenv('RECORD_FILE_PATH') # csv
     monitor_file_path = os.getenv('PROCESS_MONITOR_FILE_PATH')
-    header = ['city', 'year', 'month', 'toa_image_porpotion', 'sr_image_porpotion', 'toa_cloud_ratio', 'sr_cloud_ratio']
+    header = ['city', 'year', 'month', 'toa_image_porpotion', 'sr_image_porpotion', 'toa_cloud_ratio', 'sr_cloud_ratio', 'day']
     with open(monitor_file_path, 'w', newline='') as f:
         pass
     if (not os.path.exists(record_file_path)):
@@ -37,8 +38,12 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
         gauth.LoadCredentialsFile(os.getenv('CREDENTIALS_FILE_PATH'))
         if (gauth.credentials is None):
             gauth.LocalWebserverAuth()
-        drive = GoogleDrive(gauth)
         gauth.Refresh()
+        #check permissions
+        drive = GoogleDrive(gauth)
+        all_files = drive.ListFile({'q': "trashed=false"}).GetList()
+        print(len(all_files))
+
         logging.info(f"token current expires in: {gauth.credentials.token_expiry}")
         if gauth.credentials.refresh_token is None:
             print('refresh token is None')
@@ -47,7 +52,6 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
     for city_boundary in total_boundary.getInfo()['features']:
         index += 1
         print(f'Processing city id: {index}')
-        city_name = city_boundary['properties']['市名']
         city_name = city_boundary['properties']['市名']
         city_code = city_boundary['properties']['市代码']
         city_geometry = ee.Geometry(city_boundary['geometry'])
@@ -59,7 +63,7 @@ def create_lst_image_timeseries(folder_name,save_path,to_drive = True):
         if (city_name != check_city_name):
             logging.warning(f"City name mismatch: {city_name}, {check_city_name}")
             continue
-        year_list = range(1984,2025)
+        year_list = range(1985,2025)
         for year in year_list:
             month_list = range(1,13)
             if (to_drive):
@@ -97,7 +101,8 @@ def __main__():
     folder_name = 'landsat_lst_timeseries'
     init_record_file()
 
-    create_lst_image_timeseries(folder_name,SAVE_PATH,True)
-
+    create_lst_image_timeseries(folder_name,SAVE_PATH,False)
+    parse_record(os.getenv('RECORD_FILE_PATH'))
+    
 if __name__ == '__main__':
     __main__()

@@ -97,10 +97,10 @@ def create_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_na
     map_name = f'landsat_{city_name}'
     for satellite in satellite_list:
         try:
-            landsat_coll, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud = fetch_best_landsat_image(satellite, date_start, date_end, city_geometry, cloud_threshold, urban_geometry, use_ndvi)
+            landsat_coll, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud , day = fetch_best_landsat_image(satellite, date_start, date_end, city_geometry, cloud_threshold, urban_geometry, use_ndvi)
             with open(record_file_path, 'a', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow([city_name, year, month, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud])
+                writer.writerow([city_name, year, month, toa_porpotion, sr_porpotion, toa_cloud, sr_cloud, day])
             logging.info(f"success: {satellite}")
             map_name = f'{map_name}_{satellite}_{year}_{month}'
             break
@@ -115,10 +115,6 @@ def create_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_na
         logging.error("No Landsat data found")
         return None
 
-    image_data = {
-        'geometry': city_geometry,
-        'image': landsat_coll
-    }
     if to_drive:
         e_city_name = ''.join(pinyin(city_name))
         descrption = f"{e_city_name}Landsat{year}{month:02}"
@@ -138,7 +134,8 @@ def create_lst_image(city_name,year,month,city_geometry,urban_geometry,folder_na
             return None
     else:
         try:
-            show_map(None, image_data, map_name,'LST')
+            #image_data = {'geometry': city_geometry,'image': landsat_coll}
+            #show_map(None, image_data, map_name,'LST')
             logging.info(f"image saved to {map_name}.html")
             return month
         except Exception as e:
@@ -175,8 +172,8 @@ def export_lst_image(gauth,city_name,year,month,city_geometry,urban_geometry,fol
         try:
             try:
                 while monitor.is_process_counter_exceed_limit():
-                    logging.info(f"process counter exceed limit, wait for 60 seconds")
-                    time.sleep(60)
+                    logging.info(f"process counter exceed limit, wait for 10 minutes")
+                    time.sleep(600)
             except Exception as e:
                 logging.error(f"error to check process counter: {e}")
             try:
